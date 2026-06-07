@@ -9,6 +9,9 @@ export type Channel = {
   addedAt: string;
   updatedVia: "config" | "ui";
   updatedAt: string;
+  /** Soft-delete flag. Deleted channels are hidden by default but retained. */
+  deleted?: boolean;
+  deletedAt?: string;
 };
 
 /** Fallback group bucket. "default" is a real group, not a null state. */

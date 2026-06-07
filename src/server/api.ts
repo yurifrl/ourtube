@@ -109,7 +109,11 @@ export function initApi(): ReturnType<typeof Bun.serve> {
 
       // Groups
       if (path === "/api/groups") {
-        return jsonResponse({ groups: store.getGroups() });
+        return jsonResponse({
+          groups: store.getGroups(),
+          totalNew: store.countNew(),
+          watchLaterNew: store.countWatchLaterNew(),
+        });
       }
 
       // Client config
@@ -120,7 +124,8 @@ export function initApi(): ReturnType<typeof Bun.serve> {
       // Channels
       if (path === "/api/channels") {
         if (method === "GET") {
-          return jsonResponse({ channels: store.getChannels() });
+          const includeDeleted = url.searchParams.get("includeDeleted") === "1";
+          return jsonResponse({ channels: store.getChannels({ includeDeleted }) });
         }
         if (method === "POST") {
           const body = await req.json();
@@ -154,11 +159,20 @@ export function initApi(): ReturnType<typeof Bun.serve> {
         }
       }
 
+      // Restore a soft-deleted channel
+      if (path.startsWith("/api/channels/") && path.endsWith("/restore")) {
+        if (method === "POST") {
+          const channelId = path.split("/")[3];
+          const ok = store.restoreChannel(channelId);
+          return ok ? jsonResponse({ success: true }) : notFound();
+        }
+      }
+
       if (path.startsWith("/api/channels/")) {
         const channelId = path.split("/").pop()!;
         if (method === "DELETE") {
-          store.removeChannel(channelId);
-          return jsonResponse({ success: true });
+          const ok = store.softDeleteChannel(channelId);
+          return ok ? jsonResponse({ success: true }) : notFound();
         }
         if (method === "GET") {
           const channel = store.getChannel(channelId);

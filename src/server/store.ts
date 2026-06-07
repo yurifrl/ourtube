@@ -76,6 +76,42 @@ export class Store {
     this.db.query("DELETE FROM channels WHERE channel_id = ?").run(channelId);
   }
 
+  /**
+   * Soft-delete a channel: mark deleted=true (+deletedAt), append the FULL
+   * updated channel record to channels.jsonl, and update sqlite. The channel
+   * is retained (hidden by default) and can be restored.
+   */
+  softDeleteChannel(channelId: string): boolean {
+    const channel = this.getChannel(channelId);
+    if (!channel) return false;
+    const updated: Channel = {
+      ...channel,
+      deleted: true,
+      deletedAt: new Date().toISOString(),
+      updatedVia: "ui",
+      updatedAt: new Date().toISOString(),
+    };
+    appendFileSync(getChannelsFile(), JSON.stringify(updated) + "\n");
+    insertOrReplaceChannel(this.db, updated);
+    return true;
+  }
+
+  /** Restore a soft-deleted channel: clear deleted/deletedAt and persist. */
+  restoreChannel(channelId: string): boolean {
+    const channel = this.getChannel(channelId);
+    if (!channel) return false;
+    const updated: Channel = {
+      ...channel,
+      deleted: false,
+      deletedAt: undefined,
+      updatedVia: "ui",
+      updatedAt: new Date().toISOString(),
+    };
+    appendFileSync(getChannelsFile(), JSON.stringify(updated) + "\n");
+    insertOrReplaceChannel(this.db, updated);
+    return true;
+  }
+
   /** Update a channel's cached avatar URL (persists to JSONL). */
   setChannelAvatar(channelId: string, avatar: string): void {
     const channel = this.getChannel(channelId);
@@ -111,32 +147,54 @@ export class Store {
     this.configuredGroups = out;
   }
 
-  /** Channel count per group, from the channels table. */
+  /** Channel count per group (excludes soft-deleted), from the channels table. */
   private groupCounts(): Map<string, number> {
     const rows = this.db
-      .query("SELECT \"group\" AS g, COUNT(*) AS c FROM channels GROUP BY \"group\"")
+      .query("SELECT \"group\" AS g, COUNT(*) AS c FROM channels WHERE deleted = 0 GROUP BY \"group\"")
+      .all() as { g: string; c: number }[];
+    return new Map(rows.map((r) => [r.g, r.c]));
+  }
+
+  /** Unwatched-video count per group (non-deleted channels only). */
+  private groupNewCounts(): Map<string, number> {
+    const rows = this.db
+      .query(
+        `SELECT c."group" AS g, COUNT(*) AS c
+         FROM videos v JOIN channels c ON v.channel_id = c.channel_id
+         WHERE v.watched = 0 AND c.deleted = 0
+         GROUP BY c."group"`
+      )
       .all() as { g: string; c: number }[];
     return new Map(rows.map((r) => [r.g, r.c]));
   }
 
   /**
-   * Available groups with channel counts. The set is exactly the config-defined
-   * groups plus DEFAULT_GROUP (always present) — groups are NOT collected from
-   * channel usage. Ordered by name.
+   * Available groups with channel counts and unwatched (new) video counts.
+   * Counts exclude soft-deleted channels. The set is exactly the config-defined
+   * groups plus DEFAULT_GROUP (always present). Ordered by name.
    */
-  getGroups(): { group: string; count: number }[] {
+  getGroups(): { group: string; count: number; newCount: number }[] {
     const counts = this.groupCounts();
+    const newCounts = this.groupNewCounts();
     const names = new Set<string>([DEFAULT_GROUP, ...this.configuredGroups]);
     return [...names]
       .sort()
-      .map((group) => ({ group, count: counts.get(group) ?? 0 }));
+      .map((group) => ({
+        group,
+        count: counts.get(group) ?? 0,
+        newCount: newCounts.get(group) ?? 0,
+      }));
   }
 
-  getChannels(): Channel[] {
+  getChannels(opts: { includeDeleted?: boolean } = {}): Channel[] {
+    const whereSql = opts.includeDeleted ? "" : "WHERE deleted = 0";
     const rows = this.db
-      .query("SELECT raw FROM channels ORDER BY name")
-      .all() as { raw: string }[];
-    return rows.map((r) => JSON.parse(r.raw) as Channel);
+      .query(`SELECT raw, deleted FROM channels ${whereSql} ORDER BY name`)
+      .all() as { raw: string; deleted: number }[];
+    return rows.map((r) => ({
+      ...(JSON.parse(r.raw) as Channel),
+      deleted: !!r.deleted,
+    }));
   }
 
   getChannel(channelId: string): Channel | null {
@@ -348,6 +406,8 @@ export class Store {
       where.push('channel_id IN (SELECT channel_id FROM channels WHERE "group" = ?)');
       params.push(normalizeGroup(opts.group));
     }
+    // Exclude videos whose channel has been soft-deleted.
+    where.push("channel_id NOT IN (SELECT channel_id FROM channels WHERE deleted = 1)");
 
     const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
@@ -368,6 +428,28 @@ export class Store {
 
   // ── stats ────────────────────────────────────────────────────────────────
 
+  /** Total unwatched videos belonging to non-deleted channels. */
+  countNew(): number {
+    return (
+      this.db
+        .query(
+          "SELECT COUNT(*) AS c FROM videos WHERE watched = 0 AND channel_id NOT IN (SELECT channel_id FROM channels WHERE deleted = 1)"
+        )
+        .get() as { c: number }
+    ).c;
+  }
+
+  /** Unwatched watch-later videos belonging to non-deleted channels. */
+  countWatchLaterNew(): number {
+    return (
+      this.db
+        .query(
+          "SELECT COUNT(*) AS c FROM videos WHERE watched = 0 AND watch_later = 1 AND channel_id NOT IN (SELECT channel_id FROM channels WHERE deleted = 1)"
+        )
+        .get() as { c: number }
+    ).c;
+  }
+
   getStats(): { channels: number; videos: number; unwatched: number } {
     const channels = (this.db.query("SELECT COUNT(*) AS c FROM channels").get() as { c: number }).c;
     const videos = (this.db.query("SELECT COUNT(*) AS c FROM videos").get() as { c: number }).c;
@@ -380,10 +462,11 @@ export class Store {
 
 function insertOrReplaceChannel(db: Database, channel: Channel): void {
   const group = normalizeGroup(channel.group);
+  const deleted = channel.deleted ? 1 : 0;
   db.query(
     `INSERT OR REPLACE INTO channels
-     (channel_id, name, "group", source, added_at, updated_via, updated_at, raw)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+     (channel_id, name, "group", source, added_at, updated_via, updated_at, deleted, raw)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     channel.channelId,
     channel.name,
@@ -392,6 +475,7 @@ function insertOrReplaceChannel(db: Database, channel: Channel): void {
     channel.addedAt,
     channel.updatedVia,
     channel.updatedAt,
+    deleted,
     JSON.stringify({ ...channel, group })
   );
 }
@@ -430,9 +514,11 @@ CREATE TABLE IF NOT EXISTS channels (
   added_at TEXT NOT NULL,
   updated_via TEXT NOT NULL,
   updated_at TEXT NOT NULL,
+  deleted INTEGER NOT NULL DEFAULT 0,
   raw TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS channels_group ON channels("group");
+CREATE INDEX IF NOT EXISTS channels_deleted ON channels(deleted);
 
 CREATE TABLE IF NOT EXISTS videos (
   video_id TEXT PRIMARY KEY,

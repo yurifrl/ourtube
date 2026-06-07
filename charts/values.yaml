@@ -23,6 +23,9 @@ persistence:
 config:
   pollIntervalSeconds: 300
   logLevel: INFO
+  # On first sight of a channel, surface only the latest N videos so its
+  # historical backlog never floods the feed. Default 1.
+  initialVideosPerChannel: 1
   # discordWebhookUrl: set via secret
 
 # Channel list, declared inline (works directly in an ArgoCD Application):

@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { Video } from "lucide-react";
-import { cn, fmtRelative } from "../lib/utils";
-import type { Video as VideoType } from "../../schema/types";
+import { cn, fmtRelative, fmtDate } from "../lib/utils";
+import type { Video as VideoType, Channel } from "../../schema/types";
 
 export function Home() {
   const [videos, setVideos] = useState<VideoType[]>([]);
+  const [avatars, setAvatars] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
 
   const fetchVideos = useCallback(async () => {
@@ -15,9 +16,20 @@ export function Home() {
     setLoading(false);
   }, []);
 
+  const fetchAvatars = useCallback(async () => {
+    const res = await fetch(`/api/channels`);
+    const data = await res.json();
+    const map: Record<string, string> = {};
+    (data.channels || []).forEach((c: Channel) => {
+      if (c.avatar) map[c.channelId] = c.avatar;
+    });
+    setAvatars(map);
+  }, []);
+
   useEffect(() => {
     fetchVideos();
-  }, [fetchVideos]);
+    fetchAvatars();
+  }, [fetchVideos, fetchAvatars]);
 
   const markWatched = useCallback(async (videoId: string) => {
     // flip to watched in place — the card stays, only the glow goes away
@@ -78,6 +90,7 @@ export function Home() {
             <VideoCard
               key={video.videoId}
               video={video}
+              avatar={avatars[video.channelId]}
               onSeen={() => markWatched(video.videoId)}
             />
           ))}
@@ -89,10 +102,11 @@ export function Home() {
 
 interface VideoCardProps {
   video: VideoType;
+  avatar?: string;
   onSeen: () => void;
 }
 
-function VideoCard({ video, onSeen }: VideoCardProps) {
+function VideoCard({ video, avatar, onSeen }: VideoCardProps) {
   const ref = useRef<HTMLDivElement>(null);
   const hasEntered = useRef(false);
   const dwellTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -169,15 +183,29 @@ function VideoCard({ video, onSeen }: VideoCardProps) {
         </div>
       </a>
 
-      <div className="px-5 pt-4 pb-5">
+      <div className="px-4 pt-3 pb-4">
         <a href={video.url} target="_blank" rel="noopener noreferrer"
-          className="block text-sm font-medium text-ink-100 hover:text-accent transition-colors line-clamp-2">
+          className="block text-base font-semibold leading-snug text-ink-100 hover:text-accent transition-colors line-clamp-2">
           {video.title}
         </a>
-        <div className="flex items-center gap-2 mt-1.5 text-[11px] text-ink-400">
-          <span>{video.channelName}</span>
-          <span className="text-ink-600">·</span>
-          <span>{fmtRelative(video.publishedAt)}</span>
+        <div className="flex items-start gap-3 mt-2.5">
+          {avatar ? (
+            <img
+              src={avatar}
+              alt={video.channelName}
+              className="size-9 rounded-full object-cover shrink-0 mt-0.5"
+            />
+          ) : (
+            <div className="size-9 rounded-full bg-ink-700 grid place-items-center shrink-0 mt-0.5">
+              <Video size={14} className="text-ink-400" />
+            </div>
+          )}
+          <div className="min-w-0">
+            <div className="text-sm text-ink-300">{video.channelName}</div>
+            <div className="text-[12px] text-ink-400">
+              {fmtDate(video.publishedAt)} · {fmtRelative(video.publishedAt)}
+            </div>
+          </div>
         </div>
       </div>
     </div>

@@ -16,13 +16,20 @@ export class Poller {
   store: Store;
   discordUrl?: string;
   intervalMs: number;
+  initialVideos: number;
   timer: Timer | null = null;
   isRunning = false;
 
-  constructor(store: Store, discordUrl?: string, intervalSeconds = 300) {
+  constructor(
+    store: Store,
+    discordUrl?: string,
+    intervalSeconds = 300,
+    initialVideos = 1,
+  ) {
     this.store = store;
     this.discordUrl = discordUrl;
     this.intervalMs = intervalSeconds * 1000;
+    this.initialVideos = Math.max(0, initialVideos);
   }
 
   start(): void {
@@ -65,17 +72,19 @@ export class Poller {
 
         const videos = await fetchChannelVideos(channel.channelId, channel.name);
 
-        // First time we ever see this channel: don't flood the feed with its
-        // whole backlog. Keep only the latest video as new; everything older
-        // is recorded as already-watched so it never shows up retroactively.
-        const firstRun = this.store.countChannelVideos(channel.channelId) === 0;
+        // First sight of a channel: surface only the latest N (config), and
+        // suppress the rest of its backlog as "seen" so it never floods the
+        // feed AND never gets re-detected as new on a later poll.
+        const firstSight = this.store.isChannelUntracked(channel.channelId);
 
         videos.forEach((video, idx) => {
-          if (firstRun && idx > 0) {
-            const { isNew } = this.store.upsertVideo({ ...video, watched: true });
-            void isNew;
+          if (firstSight && idx >= this.initialVideos) {
+            this.store.markSeen(video.videoId, channel.channelId);
             return;
           }
+          // already suppressed earlier → skip, never resurrect
+          if (this.store.isSeen(video.videoId)) return;
+
           const { isNew } = this.store.upsertVideo(video);
           if (isNew) {
             newVideos.push(video);

@@ -26,6 +26,10 @@ export function getVideosFile(month: string): string {
   return join(getStorageDir(), "videos", `${month}.jsonl`);
 }
 
+export function getSeenFile(): string {
+  return join(getStorageDir(), "seen.jsonl");
+}
+
 // ── store ─────────────────────────────────────────────────────────────────
 
 export class Store {
@@ -102,6 +106,31 @@ export class Store {
     return row ? (JSON.parse(row.raw) as Channel) : null;
   }
 
+  // ── seen markers ─────────────────────────────────────────────────────────
+  // Lightweight "we already know this video, never surface it" set. Used for a
+  // channel's pre-existing backlog on first sight so it never floods the feed,
+  // while still preventing it from being re-detected as new on later polls.
+
+  isSeen(videoId: string): boolean {
+    return !!this.db
+      .query("SELECT 1 FROM seen WHERE video_id = ?")
+      .get(videoId);
+  }
+
+  markSeen(videoId: string, channelId: string): void {
+    if (this.isSeen(videoId)) return;
+    appendFileSync(getSeenFile(), JSON.stringify({ videoId, channelId }) + "\n");
+    this.db
+      .query("INSERT OR IGNORE INTO seen (video_id, channel_id) VALUES (?, ?)")
+      .run(videoId, channelId);
+  }
+
+  loadSeenFromReplay(videoId: string, channelId: string): void {
+    this.db
+      .query("INSERT OR IGNORE INTO seen (video_id, channel_id) VALUES (?, ?)")
+      .run(videoId, channelId);
+  }
+
   // ── videos ───────────────────────────────────────────────────────────────
 
   /** How many videos are stored for a channel. */
@@ -111,6 +140,21 @@ export class Store {
         .query("SELECT COUNT(*) AS c FROM videos WHERE channel_id = ?")
         .get(channelId) as { c: number }
     ).c;
+  }
+
+  /**
+   * First sight of a channel = we've stored neither a feed video nor a seen
+   * marker for it. On first sight we surface only the latest N and suppress the
+   * rest, so the historical backlog never floods the feed.
+   */
+  isChannelUntracked(channelId: string): boolean {
+    if (this.countChannelVideos(channelId) > 0) return false;
+    const seen = (
+      this.db
+        .query("SELECT COUNT(*) AS c FROM seen WHERE channel_id = ?")
+        .get(channelId) as { c: number }
+    ).c;
+    return seen === 0;
   }
 
   upsertVideo(video: Video): { isNew: boolean } {
@@ -281,6 +325,12 @@ CREATE TABLE IF NOT EXISTS videos (
 CREATE INDEX IF NOT EXISTS videos_published ON videos(published_at DESC);
 CREATE INDEX IF NOT EXISTS videos_channel ON videos(channel_id);
 CREATE INDEX IF NOT EXISTS videos_watched ON videos(watched);
+
+CREATE TABLE IF NOT EXISTS seen (
+  video_id TEXT PRIMARY KEY,
+  channel_id TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS seen_channel ON seen(channel_id);
 `;
 
 export function openStore(): Store {
@@ -357,4 +407,26 @@ export function replayVideos(store: Store): void {
 
   const { videos } = store.getStats();
   logger.info(`Replayed ${lines} video lines → ${videos} unique videos`);
+}
+
+export function replaySeen(store: Store): void {
+  const file = getSeenFile();
+  if (!existsSync(file)) {
+    logger.debug("No seen.jsonl to replay");
+    return;
+  }
+  const text = readFileSync(file, "utf8");
+  let lines = 0;
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const { videoId, channelId } = JSON.parse(line);
+      if (!videoId || !channelId) continue;
+      store.loadSeenFromReplay(videoId, channelId);
+      lines++;
+    } catch {
+      // tolerate bad lines
+    }
+  }
+  logger.info(`Replayed ${lines} seen markers`);
 }

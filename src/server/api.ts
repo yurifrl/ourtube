@@ -1,7 +1,7 @@
 /**
  * Bun HTTP server - API routes
  */
-import { openStore, replayChannels, replayVideos } from "./store";
+import { openStore, replayChannels, replayVideos, replaySeen } from "./store";
 import { loadConfigFile, findConfigFile } from "./config-loader";
 import { Poller } from "./poller";
 import { fetchChannelVideos } from "./youtube";
@@ -42,6 +42,7 @@ export function initApi(): ReturnType<typeof Bun.serve> {
   store = openStore();
   replayChannels(store);
   replayVideos(store);
+  replaySeen(store);
 
   // Load config channels
   const configPath = process.env.OT_CONFIG_PATH || findConfigFile("./config/channels");
@@ -59,7 +60,10 @@ export function initApi(): ReturnType<typeof Bun.serve> {
   // Start poller
   const pollInterval = parseInt(process.env.OT_POLL_INTERVAL_SECONDS || "300");
   const discordUrl = process.env.OT_DISCORD_WEBHOOK_URL;
-  poller = new Poller(store, discordUrl, pollInterval);
+  // On first sight of a channel, surface only the latest N videos (default 1)
+  // so a channel's historical backlog never floods the feed.
+  const initialVideos = parseInt(process.env.OT_INITIAL_VIDEOS_PER_CHANNEL || "1");
+  poller = new Poller(store, discordUrl, pollInterval, initialVideos);
   poller.start();
 
   // Start server

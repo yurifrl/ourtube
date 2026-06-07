@@ -29,6 +29,8 @@ spec:
               value: "{{ .Values.config.pollIntervalSeconds }}"
             - name: OT_INITIAL_VIDEOS_PER_CHANNEL
               value: "{{ .Values.config.initialVideosPerChannel | default 1 }}"
+            - name: OT_INITIAL_MAX_AGE_DAYS
+              value: "{{ .Values.config.initialMaxAgeDays | default 7 }}"
             - name: OT_LOG_LEVEL
               value: "{{ .Values.config.logLevel }}"
             - name: OT_STORAGE_DIR

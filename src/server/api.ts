@@ -61,9 +61,11 @@ export function initApi(): ReturnType<typeof Bun.serve> {
   const pollInterval = parseInt(process.env.OT_POLL_INTERVAL_SECONDS || "300");
   const discordUrl = process.env.OT_DISCORD_WEBHOOK_URL;
   // On first sight of a channel, surface only the latest N videos (default 1)
-  // so a channel's historical backlog never floods the feed.
+  // and only those newer than initialMaxAgeDays (default 7) so a channel's
+  // historical backlog — or a stale latest upload — never floods the feed.
   const initialVideos = parseInt(process.env.OT_INITIAL_VIDEOS_PER_CHANNEL || "1");
-  poller = new Poller(store, discordUrl, pollInterval, initialVideos);
+  const initialMaxAgeDays = parseInt(process.env.OT_INITIAL_MAX_AGE_DAYS || "7");
+  poller = new Poller(store, discordUrl, pollInterval, initialVideos, initialMaxAgeDays);
   poller.start();
 
   // Start server

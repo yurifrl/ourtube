@@ -26,6 +26,9 @@ config:
   # On first sight of a channel, surface only the latest N videos so its
   # historical backlog never floods the feed. Default 1.
   initialVideosPerChannel: 1
+  # ...and only if newer than this many days, so a rarely-posting channel
+  # whose latest upload is old surfaces nothing. Default 7.
+  initialMaxAgeDays: 7
   # discordWebhookUrl: set via secret
 
 # Channel list, declared inline (works directly in an ArgoCD Application):

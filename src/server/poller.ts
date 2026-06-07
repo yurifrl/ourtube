@@ -17,6 +17,7 @@ export class Poller {
   discordUrl?: string;
   intervalMs: number;
   initialVideos: number;
+  initialMaxAgeDays: number;
   timer: Timer | null = null;
   isRunning = false;
 
@@ -25,11 +26,13 @@ export class Poller {
     discordUrl?: string,
     intervalSeconds = 300,
     initialVideos = 1,
+    initialMaxAgeDays = 7,
   ) {
     this.store = store;
     this.discordUrl = discordUrl;
     this.intervalMs = intervalSeconds * 1000;
     this.initialVideos = Math.max(0, initialVideos);
+    this.initialMaxAgeDays = Math.max(0, initialMaxAgeDays);
   }
 
   start(): void {
@@ -72,15 +75,23 @@ export class Poller {
 
         const videos = await fetchChannelVideos(channel.channelId, channel.name);
 
-        // First sight of a channel: surface only the latest N (config), and
-        // suppress the rest of its backlog as "seen" so it never floods the
-        // feed AND never gets re-detected as new on a later poll.
+        // First sight of a channel: surface only the latest N (config) videos
+        // that are also recent enough (within initialMaxAgeDays). A rarely-
+        // posting channel whose latest upload is old surfaces nothing. The rest
+        // are suppressed as "seen" so they never flood the feed nor re-detect.
         const firstSight = this.store.isChannelUntracked(channel.channelId);
+        const maxAgeMs = this.initialMaxAgeDays * 86400 * 1000;
+        const now = Date.now();
 
         videos.forEach((video, idx) => {
-          if (firstSight && idx >= this.initialVideos) {
-            this.store.markSeen(video.videoId, channel.channelId);
-            return;
+          if (firstSight) {
+            const tooOld =
+              maxAgeMs > 0 &&
+              now - new Date(video.publishedAt).getTime() > maxAgeMs;
+            if (idx >= this.initialVideos || tooOld) {
+              this.store.markSeen(video.videoId, channel.channelId);
+              return;
+            }
           }
           // already suppressed earlier → skip, never resurrect
           if (this.store.isSeen(video.videoId)) return;

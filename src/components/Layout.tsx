@@ -71,21 +71,21 @@ export function Layout() {
             {newCount ?? 0} new
           </button>
 
-          <nav className="ml-auto flex items-center gap-1 bg-white/[0.025] ring-1 ring-white/5 rounded-xl p-1">
+          <nav className="ml-auto flex items-center gap-1">
             <NavLink
               to="/channels"
               title="Settings"
               aria-label="Settings"
               className={({ isActive }) =>
                 cn(
-                  "relative flex items-center justify-center size-8 rounded-lg transition-colors",
+                  "relative flex items-center justify-center size-9 rounded-xl ring-1 transition-colors",
                   isActive
-                    ? "text-ink-950 bg-accent shadow-glow"
-                    : "text-ink-300 hover:text-ink-100 hover:bg-white/[0.04]"
+                    ? "text-ink-950 bg-accent ring-accent/40 shadow-glow"
+                    : "text-ink-200 bg-white/[0.04] ring-white/10 hover:text-ink-50 hover:bg-white/[0.08]"
                 )
               }
             >
-              <Settings size={16} />
+              <Settings size={18} />
             </NavLink>
           </nav>
         </div>

@@ -20,6 +20,9 @@ export function Home() {
   const setFilter = useCallback((value: string) => {
     setFilterState(value);
     localStorage.setItem("ot:filter", value);
+    // Jump back to the top so the freshly-loaded entries for the selected
+    // filter are visible instead of staying scrolled down from the prior list.
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }, []);
   const [loading, setLoading] = useState(true);
   const [embedVideos, setEmbedVideos] = useState(true);

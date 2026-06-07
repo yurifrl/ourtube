@@ -5,4 +5,4 @@ Access:
   Then open http://localhost:3000
 
 Config: Add channels via ConfigMap at /config/channels.json (or .yaml/.csv)
-Storage: Data persisted to PVC
+Storage: Feed state is ephemeral (rebuilt from config + re-poll on restart)

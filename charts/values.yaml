@@ -14,12 +14,6 @@ ingress:
   # host: ourtube.local
   # annotations: {}
 
-persistence:
-  enabled: true
-  size: 5Gi
-  storageClass: ""
-  accessMode: ReadWriteOnce
-
 config:
   pollIntervalSeconds: 300
   logLevel: INFO
@@ -29,7 +23,18 @@ config:
   # ...and only if newer than this many days, so a rarely-posting channel
   # whose latest upload is old surfaces nothing. Default 7.
   initialMaxAgeDays: 7
-  # discordWebhookUrl: set via secret
+
+# External Secrets Operator: sync ALL fields from a remote item into a Secret,
+# loaded into the deployment via envFrom. Name the remote fields exactly as the
+# env vars the app reads (e.g. OT_WEBHOOK_URL_DEFAULT, OT_WEBHOOK_URL_<GROUP>).
+externalSecrets:
+  enabled: true
+  apiVersion: external-secrets.io/v1
+  refreshInterval: 1h
+  secretStore:
+    name: ""               # set to your (Cluster)SecretStore name to activate; empty = inert
+    kind: ClusterSecretStore  # or SecretStore
+  remoteKey: ourtube        # remote item to extract all fields from
 
 # Channel list, declared inline (works directly in an ArgoCD Application):
 # channels:

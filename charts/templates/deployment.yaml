@@ -33,30 +33,22 @@ spec:
               value: "{{ .Values.config.initialMaxAgeDays | default 7 }}"
             - name: OT_LOG_LEVEL
               value: "{{ .Values.config.logLevel }}"
-            - name: OT_STORAGE_DIR
-              value: /data/store
             - name: OT_CONFIG_PATH
               value: /config/channels.yaml
-            {{- if .Values.config.discordWebhookUrl }}
-            - name: OT_DISCORD_WEBHOOK_URL
-              value: "{{ .Values.config.discordWebhookUrl }}"
-            {{- end }}
+          {{- if and .Values.externalSecrets.enabled .Values.externalSecrets.secretStore.name }}
+          # All secret fields (e.g. OT_WEBHOOK_URL_DEFAULT) are loaded as env
+          # vars from the Secret synced by the ExternalSecret.
+          envFrom:
+            - secretRef:
+                name: {{ include "ourtube.fullname" . }}-secrets
+          {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
-            - name: storage
-              mountPath: /data/store
             - name: config
               mountPath: /config
               readOnly: true
       volumes:
-        - name: storage
-          {{- if .Values.persistence.enabled }}
-          persistentVolumeClaim:
-            claimName: {{ include "ourtube.fullname" . }}-storage
-          {{- else }}
-          emptyDir: {}
-          {{- end }}
         - name: config
           configMap:
             name: {{ include "ourtube.fullname" . }}-channels

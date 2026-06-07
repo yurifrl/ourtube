@@ -19,6 +19,7 @@ export class Poller {
   intervalMs: number;
   initialVideos: number;
   initialMaxAgeDays: number;
+  retentionDays: number;
   timer: Timer | null = null;
   isRunning = false;
 
@@ -27,11 +28,13 @@ export class Poller {
     intervalSeconds = 300,
     initialVideos = 1,
     initialMaxAgeDays = 7,
+    retentionDays = 0,
   ) {
     this.store = store;
     this.intervalMs = intervalSeconds * 1000;
     this.initialVideos = Math.max(0, initialVideos);
     this.initialMaxAgeDays = Math.max(0, initialMaxAgeDays);
+    this.retentionDays = Math.max(0, retentionDays);
   }
 
   start(): void {
@@ -146,5 +149,13 @@ export class Poller {
     }
 
     logger.info(`Tick complete: ${newVideos.length} new videos`);
+
+    // Retention sweep at the end of each tick (no-op when disabled).
+    if (this.retentionDays > 0) {
+      const purged = this.store.purgeOldVideos(this.retentionDays);
+      if (purged > 0) {
+        logger.info(`Retention sweep: purged ${purged} videos older than ${this.retentionDays} days`);
+      }
+    }
   }
 }

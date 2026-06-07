@@ -44,6 +44,14 @@ export function initApi(): ReturnType<typeof Bun.serve> {
   replayVideos(store);
   replaySeen(store);
 
+  // Retention: purge videos older than OT_RETENTION_DAYS (except Watch Later).
+  // Unset/0/negative => retention disabled (keep everything forever).
+  const retentionDays = parseInt(process.env.OT_RETENTION_DAYS || "0");
+  if (retentionDays > 0) {
+    const purged = store.purgeOldVideos(retentionDays);
+    logger.info(`Retention sweep (boot): purged ${purged} videos older than ${retentionDays} days`);
+  }
+
   // Load config channels + groups
   const configPath = process.env.OT_CONFIG_PATH || findConfigFile("./config/channels");
   if (configPath) {
@@ -68,7 +76,7 @@ export function initApi(): ReturnType<typeof Bun.serve> {
   const initialMaxAgeDays = parseInt(process.env.OT_INITIAL_MAX_AGE_DAYS || "7");
   // Webhooks are resolved per group from the environment by convention
   // (OT_WEBHOOK_URL_<GROUP> + _*) inside the poller — see src/server/webhooks.ts.
-  poller = new Poller(store, pollInterval, initialVideos, initialMaxAgeDays);
+  poller = new Poller(store, pollInterval, initialVideos, initialMaxAgeDays, retentionDays);
   poller.start();
 
   // Inline embedded playback toggle. Default ON; "0"/"false"/"" disable it.
@@ -106,7 +114,7 @@ export function initApi(): ReturnType<typeof Bun.serve> {
 
       // Client config
       if (path === "/api/config") {
-        return jsonResponse({ embedVideos });
+        return jsonResponse({ embedVideos, retentionDays });
       }
 
       // Channels
@@ -167,6 +175,13 @@ export function initApi(): ReturnType<typeof Bun.serve> {
         const offset = parseInt(url.searchParams.get("offset") || "0");
         const result = store.getVideos({ unwatchedOnly, watchLaterOnly, group, limit, offset });
         return jsonResponse(result);
+      }
+
+      if (path === "/api/videos/mark-all-watched") {
+        if (method === "POST") {
+          const count = store.markAllWatched();
+          return jsonResponse({ success: true, count });
+        }
       }
 
       if (path.startsWith("/api/videos/") && path.includes("/watched")) {

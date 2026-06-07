@@ -31,6 +31,11 @@ export function getSeenFile(): string {
   return join(getStorageDir(), "seen.jsonl");
 }
 
+/** Tombstones for purged videos. A tombstone wins over any month-file record. */
+export function getPurgedFile(): string {
+  return join(getStorageDir(), "purged.jsonl");
+}
+
 // ── store ─────────────────────────────────────────────────────────────────
 
 export class Store {
@@ -237,6 +242,54 @@ export class Store {
       JSON.stringify(updated),
       videoId
     );
+  }
+
+  /**
+   * Set every currently-unwatched video to watched (mirrors markWatched:
+   * appends the updated record to each video's month JSONL + updates sqlite).
+   * Returns the number of videos changed.
+   */
+  markAllWatched(): number {
+    const rows = this.db
+      .query("SELECT raw FROM videos WHERE watched = 0")
+      .all() as { raw: string }[];
+    const watchedAt = new Date().toISOString();
+    const watchedAtMs = Date.parse(watchedAt);
+    let count = 0;
+    for (const row of rows) {
+      const video = JSON.parse(row.raw) as Video;
+      const updated: Video = { ...video, watched: true, watchedAt };
+      const month = video.publishedAt.slice(0, 7);
+      appendFileSync(getVideosFile(month), JSON.stringify(updated) + "\n");
+      this.db.query(
+        "UPDATE videos SET watched = ?, watched_at = ?, raw = ? WHERE video_id = ?"
+      ).run(1, watchedAtMs, JSON.stringify(updated), video.videoId);
+      count++;
+    }
+    return count;
+  }
+
+  /**
+   * Delete videos whose publishedAt is older than `days` days, EXCEPT those in
+   * the Watch Later queue (always kept). Appends a tombstone per purged video
+   * to purged.jsonl so they never resurrect on replay. Returns count purged.
+   * `days <= 0` (or non-finite) disables retention and purges nothing.
+   */
+  purgeOldVideos(days: number): number {
+    if (!Number.isFinite(days) || days <= 0) return 0;
+    const cutoff = Date.now() - days * 86400 * 1000;
+    const rows = this.db
+      .query("SELECT video_id FROM videos WHERE published_at < ? AND watch_later = 0")
+      .all(cutoff) as { video_id: string }[];
+    if (rows.length === 0) return 0;
+    const file = getPurgedFile();
+    mkdirSync(dirname(file), { recursive: true });
+    const deletedAt = new Date().toISOString();
+    for (const { video_id } of rows) {
+      appendFileSync(file, JSON.stringify({ videoId: video_id, _deleted: true, deletedAt }) + "\n");
+      this.db.query("DELETE FROM videos WHERE video_id = ?").run(video_id);
+    }
+    return rows.length;
   }
 
   /** Add/remove a video from the Watch Later queue (persists to JSONL). */
@@ -465,6 +518,23 @@ export function replayVideos(store: Store): void {
     .filter((f) => f.endsWith(".jsonl"))
     .sort();
 
+  // Collect tombstoned (purged) video ids first; a tombstone wins over any
+  // month-file record (incl. later markWatched/setWatchLater appends), so we
+  // simply skip those ids while rebuilding the store.
+  const purged = new Set<string>();
+  const purgedFile = getPurgedFile();
+  if (existsSync(purgedFile)) {
+    for (const line of readFileSync(purgedFile, "utf8").split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const data = JSON.parse(line);
+        if (data._deleted && data.videoId) purged.add(data.videoId);
+      } catch {
+        // tolerate bad lines
+      }
+    }
+  }
+
   let lines = 0;
 
   for (const f of files) {
@@ -474,6 +544,7 @@ export function replayVideos(store: Store): void {
       try {
         const video = JSON.parse(line) as Video;
         if (!video.videoId) continue;
+        if (purged.has(video.videoId)) continue;
         insertOrReplaceVideo(store.db, video);
         lines++;
       } catch {

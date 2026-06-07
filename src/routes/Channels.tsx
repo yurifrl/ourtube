@@ -1,13 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
-import { Plus, Trash2, Youtube, Users, Tag, Copy, Check } from "lucide-react";
+import { Plus, Trash2, Youtube, Users, Tag, Copy, Check, Undo2, EyeOff } from "lucide-react";
 import { cn } from "../lib/utils";
 import type { Channel } from "../../schema/types";
 import { normalizeGroup } from "../../schema/types";
 
 type GroupInfo = { group: string; count: number };
 
+// The API now carries soft-delete metadata; reflect it locally until the
+// shared Channel type picks these optional fields up.
+type ChannelRow = Channel & { deleted?: boolean; deletedAt?: string };
+
 export function Channels() {
-  const [channels, setChannels] = useState<Channel[]>([]);
+  const [channels, setChannels] = useState<ChannelRow[]>([]);
   const [groups, setGroups] = useState<GroupInfo[]>([]);
   const [newId, setNewId] = useState("");
   const [newName, setNewName] = useState("");
@@ -16,9 +20,10 @@ export function Channels() {
   const [filter, setFilter] = useState<string>("all");
   const [movingId, setMovingId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [showDeleted, setShowDeleted] = useState(false);
 
-  const fetchChannels = async () => {
-    const res = await fetch("/api/channels");
+  const fetchChannels = async (includeDeleted = showDeleted) => {
+    const res = await fetch(includeDeleted ? "/api/channels?includeDeleted=1" : "/api/channels");
     const data = await res.json();
     setChannels(data.channels || []);
   };
@@ -30,9 +35,9 @@ export function Channels() {
   };
 
   useEffect(() => {
-    fetchChannels();
+    fetchChannels(showDeleted);
     fetchGroups();
-  }, []);
+  }, [showDeleted]);
 
   // Selectable group names = config-defined groups (from the server).
   const groupNames = useMemo(() => groups.map((g) => g.group), [groups]);
@@ -60,8 +65,17 @@ export function Channels() {
     fetchGroups();
   };
 
+  // Soft-remove: DELETE now just marks the channel deleted. The row drops out
+  // of the default list (and stays visible only when "Show deleted" is on).
   const handleRemove = async (channelId: string) => {
     await fetch(`/api/channels/${channelId}`, { method: "DELETE" });
+    fetchChannels();
+    fetchGroups();
+  };
+
+  // Clear the deleted flag and refresh.
+  const handleRestore = async (channelId: string) => {
+    await fetch(`/api/channels/${channelId}/restore`, { method: "POST" });
     fetchChannels();
     fetchGroups();
   };
@@ -121,6 +135,22 @@ export function Channels() {
         </div>
 
         <div className="card-body">
+          {/* Show-deleted toggle — off by default; on fetches includeDeleted=1 */}
+          <div className="flex items-center justify-end mb-3">
+            <button
+              onClick={() => setShowDeleted((v) => !v)}
+              className={cn(
+                "btn text-[12px] ring-1",
+                showDeleted
+                  ? "btn-accent ring-accent/40"
+                  : "btn-ghost ring-white/10 text-ink-300 hover:text-ink-100"
+              )}
+              title={showDeleted ? "Hiding deleted channels" : "Showing deleted channels"}
+            >
+              <EyeOff size={14} />
+              Show deleted
+            </button>
+          </div>
           {/* Group filter — groups come from config (server), not free text */}
           <div className="flex flex-wrap items-center gap-1.5 mb-4">
             <GroupChip label={`All (${channels.length})`} active={filter === "all"} onClick={() => setFilter("all")} />
@@ -182,7 +212,10 @@ export function Channels() {
               {visible.map((c) => (
                 <div
                   key={c.channelId}
-                  className="group flex items-center justify-between gap-3 rounded-xl px-2.5 py-2.5 transition-colors hover:bg-white/[0.03]"
+                  className={cn(
+                    "group flex items-center justify-between gap-3 rounded-xl px-2.5 py-2.5 transition-colors hover:bg-white/[0.03]",
+                    c.deleted && "opacity-50"
+                  )}
                 >
                   <div className="flex items-center gap-3 min-w-0">
                     {c.avatar ? (
@@ -202,10 +235,16 @@ export function Channels() {
                           href={`https://www.youtube.com/channel/${c.channelId}`}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-sm font-medium text-ink-100 truncate hover:text-accent transition-colors"
+                          className={cn(
+                            "text-sm font-medium text-ink-100 truncate hover:text-accent transition-colors",
+                            c.deleted && "line-through"
+                          )}
                         >
                           {c.name}
                         </a>
+                        {c.deleted && (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-verdict-stop/20 text-verdict-stop">deleted</span>
+                        )}
                         {c.source === "config" ? (
                           <span className="text-[9px] px-1.5 py-0.5 rounded bg-ink-700 text-ink-300">config</span>
                         ) : (
@@ -249,13 +288,23 @@ export function Channels() {
                     >
                       {copiedId === c.channelId ? <Check size={14} /> : <Copy size={14} />}
                     </button>
-                    <button
-                      onClick={() => handleRemove(c.channelId)}
-                      className="btn btn-ghost opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity text-ink-400 hover:text-verdict-stop"
-                      title="Remove"
-                    >
-                      <Trash2 size={14} />
-                    </button>
+                    {c.deleted ? (
+                      <button
+                        onClick={() => handleRestore(c.channelId)}
+                        className="btn btn-ghost opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity text-ink-400 hover:text-accent"
+                        title="Restore"
+                      >
+                        <Undo2 size={14} />
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => handleRemove(c.channelId)}
+                        className="btn btn-ghost opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity text-ink-400 hover:text-verdict-stop"
+                        title="Remove"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}

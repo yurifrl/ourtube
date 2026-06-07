@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "bun --bun vite",
+    "dev:server": "OT_PORT=3001 bun run --watch src/server/index.ts",
     "build": "tsc -b && bun --bun vite build",
     "preview": "bun --bun vite preview",
     "server": "bun run src/server/index.ts",

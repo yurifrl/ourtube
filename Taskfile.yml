@@ -16,11 +16,17 @@ tasks:
       - op inject -f --account my.1password.com -i .env.op -o .env
 
   dev:
-    desc: Run dev server (frontend + backend proxy)
+    desc: Run dev (vite frontend on :3000 + backend on :3001, proxied)
     deps: [envs:op]
     dotenv: ['.env']
+    env:
+      OT_CONFIG_PATH: ./config/channels.json
     cmds:
-      - bun run dev
+      - |
+        bun run dev:server &
+        SERVER_PID=$!
+        trap "kill $SERVER_PID 2>/dev/null" EXIT
+        bun run dev
 
   server:
     desc: Run backend server only

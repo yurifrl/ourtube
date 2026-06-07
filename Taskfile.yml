@@ -1,0 +1,59 @@
+version: '3'
+
+tasks:
+  run:
+    desc: Run the app (default)
+    deps: [envs:op]
+    dotenv: ['.env']
+    cmds:
+      - bun run src/server/index.ts
+
+  envs:op:
+    desc: Process .env.op with 1Password CLI
+    generates:
+      - .env
+    cmds:
+      - op inject -f --account my.1password.com -i .env.op -o .env
+
+  dev:
+    desc: Run dev server (frontend + backend proxy)
+    deps: [envs:op]
+    dotenv: ['.env']
+    cmds:
+      - bun run dev
+
+  server:
+    desc: Run backend server only
+    deps: [envs:op]
+    dotenv: ['.env']
+    cmds:
+      - bun run src/server/index.ts
+
+  build:
+    desc: Build production bundle
+    cmds:
+      - bun run build
+
+  start:
+    desc: Build and run production server
+    deps: [envs:op, build]
+    dotenv: ['.env']
+    cmds:
+      - bun run src/server/index.ts
+
+  docker:build:
+    desc: Build Docker image
+    cmds:
+      - docker build -t ourtube:latest .
+
+  docker:run:
+    desc: Run Docker container locally
+    deps: [envs:op]
+    dotenv: ['.env']
+    cmds:
+      - docker run -p 3000:3000 -e OT_DISCORD_WEBHOOK_URL=$OT_DISCORD_WEBHOOK_URL ourtube:latest
+
+  test:
+    desc: Run tests
+    cmds:
+      - echo "No tests yet"

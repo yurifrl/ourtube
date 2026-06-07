@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ourtube.fullname" . }}-channels
+  labels:
+    {{- include "ourtube.labels" . | nindent 4 }}
+data:
+  channels.yaml: |
+{{ .Values.channels | default list | toYaml | indent 4 }}

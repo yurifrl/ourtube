@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ourtube.fullname" . }}
+  labels:
+    {{- include "ourtube.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "ourtube.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ourtube.selectorLabels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: ourtube
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          env:
+            - name: OT_PORT
+              value: "3000"
+            - name: OT_POLL_INTERVAL_SECONDS
+              value: "{{ .Values.config.pollIntervalSeconds }}"
+            - name: OT_LOG_LEVEL
+              value: "{{ .Values.config.logLevel }}"
+            - name: OT_STORAGE_DIR
+              value: /data/store
+            - name: OT_CONFIG_PATH
+              value: /config/channels.yaml
+            {{- if .Values.config.discordWebhookUrl }}
+            - name: OT_DISCORD_WEBHOOK_URL
+              value: "{{ .Values.config.discordWebhookUrl }}"
+            {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: storage
+              mountPath: /data/store
+            - name: config
+              mountPath: /config
+              readOnly: true
+      volumes:
+        - name: storage
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "ourtube.fullname" . }}-storage
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: config
+          configMap:
+            name: {{ include "ourtube.fullname" . }}-channels

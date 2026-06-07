@@ -14,12 +14,6 @@ ingress:
   # host: ourtube.local
   # annotations: {}
 
-virtualService:
-  enabled: false
-  gateways:
-    - istio-system/tailscale
-  hosts: []
-
 persistence:
   enabled: true
   size: 5Gi

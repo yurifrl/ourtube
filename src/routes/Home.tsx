@@ -8,7 +8,9 @@ type ViewMode = "grid" | "single";
 export function Home() {
   const [videos, setVideos] = useState<VideoType[]>([]);
   const [avatars, setAvatars] = useState<Record<string, string>>({});
-  const [groups, setGroups] = useState<{ group: string; count: number }[]>([]);
+  const [groups, setGroups] = useState<{ group: string; count: number; newCount?: number }[]>([]);
+  const [totalNew, setTotalNew] = useState<number>(0);
+  const [watchLaterNew, setWatchLaterNew] = useState<number>(0);
   // Single-select feed filter. Special values: "all" and "watchlater"
   // (a virtual group, never used for webhook routing); anything else is a
   // real channel group. Persisted to localStorage (ot:filter).
@@ -51,8 +53,10 @@ export function Home() {
   const fetchGroups = useCallback(async () => {
     const res = await fetch(`/api/groups`);
     const data = await res.json();
-    const loaded: { group: string; count: number }[] = data.groups || [];
+    const loaded: { group: string; count: number; newCount?: number }[] = data.groups || [];
     setGroups(loaded);
+    setTotalNew(data.totalNew ?? 0);
+    setWatchLaterNew(data.watchLaterNew ?? 0);
     // Staleness guard: a persisted group filter that no longer exists falls
     // back to "all". Valid persisted selections are left untouched.
     setFilterState((cur) => {
@@ -128,20 +132,24 @@ export function Home() {
       <div className="flex items-center justify-between gap-3 flex-wrap">
         {/* group filter — Watch Later is a virtual group alongside All + real groups */}
         <div className="flex items-center gap-1.5 flex-wrap">
-          <FilterChip label="All" active={filter === "all"} onClick={() => setFilter("all")} />
-          {groups.map((g) => (
-            <FilterChip
-              key={g.group}
-              label={g.group}
-              active={filter === g.group}
-              onClick={() => setFilter(g.group)}
-            />
-          ))}
+          <FilterChip label="All" active={filter === "all"} onClick={() => setFilter("all")} title={`${totalNew} new`} />
+          {groups
+            .filter((g) => g.count > 0)
+            .map((g) => (
+              <FilterChip
+                key={g.group}
+                label={g.group}
+                active={filter === g.group}
+                onClick={() => setFilter(g.group)}
+                title={`${g.newCount ?? 0} new`}
+              />
+            ))}
           <FilterChip
             label="Watch Later"
             icon={<Bookmark size={12} />}
             active={filter === "watchlater"}
             onClick={() => setFilter("watchlater")}
+            title={`${watchLaterNew} new`}
           />
         </div>
 
@@ -213,10 +221,11 @@ export function Home() {
   );
 }
 
-function FilterChip({ label, active, onClick, icon }: { label: string; active: boolean; onClick: () => void; icon?: React.ReactNode }) {
+function FilterChip({ label, active, onClick, icon, title }: { label: string; active: boolean; onClick: () => void; icon?: React.ReactNode; title?: string }) {
   return (
     <button
       onClick={onClick}
+      title={title}
       className={cn(
         "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[12px] font-medium transition-colors",
         active

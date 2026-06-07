@@ -1,12 +1,17 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { Video } from "lucide-react";
+import { Video, LayoutGrid, Square } from "lucide-react";
 import { cn, fmtRelative, fmtDate } from "../lib/utils";
 import type { Video as VideoType, Channel } from "../../schema/types";
+
+type ViewMode = "grid" | "single";
 
 export function Home() {
   const [videos, setVideos] = useState<VideoType[]>([]);
   const [avatars, setAvatars] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
+  const [view, setView] = useState<ViewMode>(
+    () => (localStorage.getItem("ot:view") as ViewMode) || "grid"
+  );
 
   const fetchVideos = useCallback(async () => {
     // fetch ALL videos — watched ones stay in the feed, they just lose the glow
@@ -31,6 +36,11 @@ export function Home() {
     fetchAvatars();
   }, [fetchVideos, fetchAvatars]);
 
+  const setViewMode = (mode: ViewMode) => {
+    setView(mode);
+    localStorage.setItem("ot:view", mode);
+  };
+
   const markWatched = useCallback(async (videoId: string) => {
     // flip to watched in place — the card stays, only the glow goes away
     setVideos((prev) =>
@@ -41,9 +51,9 @@ export function Home() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ watched: true }),
     });
+    // tell the header to refresh the "new" count
+    window.dispatchEvent(new Event("ot:feedchanged"));
   }, []);
-
-  const newCount = videos.filter((v) => !v.watched).length;
 
   if (loading) {
     return (
@@ -58,20 +68,32 @@ export function Home() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between sticky top-[60px] z-10 py-2">
-        <h2 className="text-lg font-semibold text-ink-100">Feed</h2>
-        <div className="flex items-center gap-2">
-          <span
+      <div className="flex items-center justify-end">
+        <div className="flex items-center gap-1 bg-white/[0.025] ring-1 ring-white/5 rounded-xl p-1">
+          <button
+            onClick={() => setViewMode("grid")}
             className={cn(
-              "inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[12px] font-medium transition-colors",
-              newCount > 0
-                ? "bg-accent/15 text-accent ring-1 ring-accent/30"
-                : "bg-white/[0.04] text-ink-400 ring-1 ring-white/5"
+              "flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] font-medium transition-colors",
+              view === "grid"
+                ? "text-ink-950 bg-accent shadow-glow"
+                : "text-ink-300 hover:text-ink-100 hover:bg-white/[0.04]"
             )}
+            title="Grid view"
           >
-            <span className={cn("size-1.5 rounded-full", newCount > 0 ? "bg-accent animate-breathe" : "bg-ink-500")} />
-            {newCount} new
-          </span>
+            <LayoutGrid size={14} /> Grid
+          </button>
+          <button
+            onClick={() => setViewMode("single")}
+            className={cn(
+              "flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[12px] font-medium transition-colors",
+              view === "single"
+                ? "text-ink-950 bg-accent shadow-glow"
+                : "text-ink-300 hover:text-ink-100 hover:bg-white/[0.04]"
+            )}
+            title="Single view"
+          >
+            <Square size={14} /> Single
+          </button>
         </div>
       </div>
 
@@ -84,8 +106,19 @@ export function Home() {
             </div>
           </div>
         </div>
-      ) : (
+      ) : view === "grid" ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {videos.map((video) => (
+            <VideoCard
+              key={video.videoId}
+              video={video}
+              avatar={avatars[video.channelId]}
+              onSeen={() => markWatched(video.videoId)}
+            />
+          ))}
+        </div>
+      ) : (
+        <div className="max-w-2xl mx-auto flex flex-col gap-8">
           {videos.map((video) => (
             <VideoCard
               key={video.videoId}

@@ -1,3 +1,4 @@
+import { useEffect, useState, useCallback } from "react";
 import { Video, List, Zap } from "lucide-react";
 import { Link, NavLink, Outlet } from "react-router-dom";
 import { cn } from "../lib/utils";
@@ -8,6 +9,29 @@ const TABS = [
 ];
 
 export function Layout() {
+  const [newCount, setNewCount] = useState<number | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const res = await fetch("/api/videos?unwatched=1&limit=1");
+      const data = await res.json();
+      setNewCount(data.totalCount ?? 0);
+    } catch {
+      /* offline */
+    }
+  }, []);
+
+  useEffect(() => {
+    refresh();
+    const id = setInterval(refresh, 5000);
+    const onChange = () => refresh();
+    window.addEventListener("ot:feedchanged", onChange);
+    return () => {
+      clearInterval(id);
+      window.removeEventListener("ot:feedchanged", onChange);
+    };
+  }, [refresh]);
+
   return (
     <div className="relative min-h-screen text-ink-100">
       <header className="sticky top-0 z-20 backdrop-blur-xl bg-ink-950/70 border-b border-white/5">
@@ -47,8 +71,22 @@ export function Layout() {
           </nav>
 
           <div className="ml-auto flex items-center gap-2">
-            <span className="size-1.5 rounded-full bg-accent animate-breathe" />
-            <span className="text-[11px] text-ink-300">online</span>
+            <span
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[12px] font-medium transition-colors",
+                newCount && newCount > 0
+                  ? "bg-accent/15 text-accent ring-1 ring-accent/30"
+                  : "bg-white/[0.04] text-ink-400 ring-1 ring-white/5"
+              )}
+            >
+              <span
+                className={cn(
+                  "size-1.5 rounded-full",
+                  newCount && newCount > 0 ? "bg-accent animate-breathe" : "bg-ink-500"
+                )}
+              />
+              {newCount ?? 0} new
+            </span>
           </div>
         </div>
       </header>

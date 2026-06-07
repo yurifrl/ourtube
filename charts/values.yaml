@@ -1,7 +1,7 @@
 replicaCount: 1
 
 image:
-  repository: ourtube
+  repository: ghcr.io/yurifrl/ourtube
   tag: latest
   pullPolicy: IfNotPresent
 
@@ -13,6 +13,12 @@ ingress:
   enabled: false
   # host: ourtube.local
   # annotations: {}
+
+virtualService:
+  enabled: false
+  gateways:
+    - istio-system/tailscale
+  hosts: []
 
 persistence:
   enabled: true

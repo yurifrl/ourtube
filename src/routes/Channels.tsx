@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Plus, Trash2, Youtube, Users, Tag } from "lucide-react";
+import { Plus, Trash2, Youtube, Users, Tag, Copy, Check } from "lucide-react";
 import { cn } from "../lib/utils";
 import type { Channel } from "../../schema/types";
 import { normalizeGroup } from "../../schema/types";
@@ -15,6 +15,7 @@ export function Channels() {
   const [isAdding, setIsAdding] = useState(false);
   const [filter, setFilter] = useState<string>("all");
   const [movingId, setMovingId] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const fetchChannels = async () => {
     const res = await fetch("/api/channels");
@@ -85,6 +86,17 @@ export function Channels() {
   const optionsFor = (current: string): string[] => {
     const set = new Set<string>([...groupNames, normalizeGroup(current)]);
     return [...set].sort();
+  };
+
+  // Copy a channel ID to the clipboard, showing a brief per-row confirmation.
+  const copyId = async (channelId: string) => {
+    try {
+      await navigator.clipboard.writeText(channelId);
+      setCopiedId(channelId);
+      setTimeout(() => setCopiedId((cur) => (cur === channelId ? null : cur)), 1500);
+    } catch {
+      /* clipboard unavailable */
+    }
   };
 
   const groupSelectClass =
@@ -166,9 +178,12 @@ export function Channels() {
               <p>No channels. Add one to get started.</p>
             </div>
           ) : (
-            <div className="divide-y divide-white/5">
+            <div className="space-y-1">
               {visible.map((c) => (
-                <div key={c.channelId} className="py-3 flex items-center justify-between group">
+                <div
+                  key={c.channelId}
+                  className="group flex items-center justify-between gap-3 rounded-xl px-2.5 py-2.5 transition-colors hover:bg-white/[0.03]"
+                >
                   <div className="flex items-center gap-3 min-w-0">
                     {c.avatar ? (
                       <img
@@ -177,13 +192,20 @@ export function Channels() {
                         className="size-10 rounded-full object-cover ring-1 ring-white/10 shrink-0"
                       />
                     ) : (
-                      <div className="size-10 rounded-full bg-ink-700 grid place-items-center shrink-0">
+                      <div className="size-10 rounded-full bg-ink-700 grid place-items-center shrink-0 ring-1 ring-white/10">
                         <Youtube size={16} className="text-ink-400" />
                       </div>
                     )}
                     <div className="min-w-0">
-                      <div className="text-sm font-medium text-ink-100 flex items-center gap-2">
-                        {c.name}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <a
+                          href={`https://www.youtube.com/channel/${c.channelId}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-sm font-medium text-ink-100 truncate hover:text-accent transition-colors"
+                        >
+                          {c.name}
+                        </a>
                         {c.source === "config" ? (
                           <span className="text-[9px] px-1.5 py-0.5 rounded bg-ink-700 text-ink-300">config</span>
                         ) : (
@@ -211,14 +233,25 @@ export function Channels() {
                           </button>
                         )}
                       </div>
-                      <div className="text-[11px] text-ink-400 font-mono mt-0.5">{c.channelId}</div>
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      onClick={() => copyId(c.channelId)}
+                      className={cn(
+                        "btn btn-ghost transition-all",
+                        copiedId === c.channelId
+                          ? "opacity-100 text-accent"
+                          : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100 text-ink-400 hover:text-ink-100"
+                      )}
+                      title={copiedId === c.channelId ? "Copied!" : "Copy channel ID"}
+                    >
+                      {copiedId === c.channelId ? <Check size={14} /> : <Copy size={14} />}
+                    </button>
                     <button
                       onClick={() => handleRemove(c.channelId)}
-                      className="btn btn-ghost opacity-0 group-hover:opacity-100 transition-opacity text-ink-400 hover:text-verdict-stop"
+                      className="btn btn-ghost opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity text-ink-400 hover:text-verdict-stop"
                       title="Remove"
                     >
                       <Trash2 size={14} />

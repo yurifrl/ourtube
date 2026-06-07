@@ -11,8 +11,14 @@ export function Home() {
   const [groups, setGroups] = useState<{ group: string; count: number }[]>([]);
   // Single-select feed filter. Special values: "all" and "watchlater"
   // (a virtual group, never used for webhook routing); anything else is a
-  // real channel group.
-  const [filter, setFilter] = useState<string>("all");
+  // real channel group. Persisted to localStorage (ot:filter).
+  const [filter, setFilterState] = useState<string>(
+    () => localStorage.getItem("ot:filter") || "all"
+  );
+  const setFilter = useCallback((value: string) => {
+    setFilterState(value);
+    localStorage.setItem("ot:filter", value);
+  }, []);
   const [loading, setLoading] = useState(true);
   const [embedVideos, setEmbedVideos] = useState(true);
   const [view, setView] = useState<ViewMode>(
@@ -45,7 +51,16 @@ export function Home() {
   const fetchGroups = useCallback(async () => {
     const res = await fetch(`/api/groups`);
     const data = await res.json();
-    setGroups(data.groups || []);
+    const loaded: { group: string; count: number }[] = data.groups || [];
+    setGroups(loaded);
+    // Staleness guard: a persisted group filter that no longer exists falls
+    // back to "all". Valid persisted selections are left untouched.
+    setFilterState((cur) => {
+      if (cur === "all" || cur === "watchlater") return cur;
+      if (loaded.some((g) => g.group === cur)) return cur;
+      localStorage.setItem("ot:filter", "all");
+      return "all";
+    });
   }, []);
 
   const fetchConfig = useCallback(async () => {
@@ -222,21 +237,42 @@ interface VideoCardProps {
   onWatchLater: () => void;
 }
 
+// How long a card must stay continuously visible / hovered before it counts
+// as viewed. Visible-dwell mirrors the established RSS/news-reader rule
+// (Feedly, NetNewsWire, Google Reader): mark read once an item has been
+// sufficiently on-screen for a short continuous dwell, firing on the timer
+// rather than on scroll-out. This avoids fast-scroll flybys yet is
+// predictable — if you can read it, it's marked. Hover-dwell is the
+// pointer-driven equivalent for users who linger with the mouse.
+const VISIBLE_DWELL_MS = 1800;
+const HOVER_DWELL_MS = 2500;
+
 function VideoCard({ video, avatar, embedVideos, onSeen, onWatchLater }: VideoCardProps) {
   const ref = useRef<HTMLDivElement>(null);
-  const hasEntered = useRef(false);
-  const dwellTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const visibleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Guard so neither timer, hover, nor inline play can double-fire onSeen.
+  const seenFired = useRef(false);
   const [playing, setPlaying] = useState(false);
 
   const isNew = !video.watched;
+
+  const fireSeen = useCallback(() => {
+    if (seenFired.current) return;
+    seenFired.current = true;
+    onSeen();
+  }, [onSeen]);
 
   // Begin inline playback: swap to the iframe and mark the video watched so
   // the "new" glow/count stay consistent.
   const startPlaying = useCallback(() => {
     setPlaying(true);
-    onSeen();
-  }, [onSeen]);
+    fireSeen();
+  }, [fireSeen]);
 
+  // Visible-dwell: fire when the card has been continuously visible past the
+  // threshold for VISIBLE_DWELL_MS. The timer is cleared on exit so a quick
+  // scroll past never trips it.
   useEffect(() => {
     if (!isNew) return;
     const el = ref.current;
@@ -245,23 +281,15 @@ function VideoCard({ video, avatar, embedVideos, onSeen, onWatchLater }: VideoCa
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting) {
-          // require the card to actually linger in view (not a fast-scroll
-          // flyby) before it counts as "seen"
-          if (!dwellTimer.current) {
-            dwellTimer.current = setTimeout(() => {
-              hasEntered.current = true;
-            }, 700);
+          if (!visibleTimer.current) {
+            visibleTimer.current = setTimeout(() => {
+              visibleTimer.current = null;
+              fireSeen();
+            }, VISIBLE_DWELL_MS);
           }
-        } else {
-          // left view: cancel a pending dwell
-          if (dwellTimer.current) {
-            clearTimeout(dwellTimer.current);
-            dwellTimer.current = null;
-          }
-          // only mark seen if it had genuinely lingered earlier
-          if (hasEntered.current) {
-            onSeen();
-          }
+        } else if (visibleTimer.current) {
+          clearTimeout(visibleTimer.current);
+          visibleTimer.current = null;
         }
       },
       { threshold: 0.6 }
@@ -270,13 +298,39 @@ function VideoCard({ video, avatar, embedVideos, onSeen, onWatchLater }: VideoCa
     observer.observe(el);
     return () => {
       observer.disconnect();
-      if (dwellTimer.current) clearTimeout(dwellTimer.current);
+      if (visibleTimer.current) {
+        clearTimeout(visibleTimer.current);
+        visibleTimer.current = null;
+      }
     };
-  }, [isNew, onSeen]);
+  }, [isNew, fireSeen]);
+
+  // Hover-dwell: lingering the pointer over the card for HOVER_DWELL_MS marks
+  // it viewed; leaving clears the pending timer.
+  const handleMouseEnter = useCallback(() => {
+    if (!isNew || hoverTimer.current) return;
+    hoverTimer.current = setTimeout(() => {
+      hoverTimer.current = null;
+      fireSeen();
+    }, HOVER_DWELL_MS);
+  }, [isNew, fireSeen]);
+
+  const handleMouseLeave = useCallback(() => {
+    if (hoverTimer.current) {
+      clearTimeout(hoverTimer.current);
+      hoverTimer.current = null;
+    }
+  }, []);
+
+  useEffect(() => () => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+  }, []);
 
   return (
     <div
       ref={ref}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
       className={cn(
         "card group overflow-hidden transition-shadow duration-700",
         isNew && "ring-1 ring-accent/40 shadow-glow"

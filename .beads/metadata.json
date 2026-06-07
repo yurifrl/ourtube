@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "ourtube",
+  "project_id": "e5c64db1-076a-4351-b500-f8cf4b74f7c8"
+}

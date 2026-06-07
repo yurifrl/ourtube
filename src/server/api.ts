@@ -2,7 +2,7 @@
  * Bun HTTP server - API routes
  */
 import { openStore, replayChannels, replayVideos, replaySeen } from "./store";
-import { loadConfigFile, findConfigFile } from "./config-loader";
+import { loadConfig, findConfigFile } from "./config-loader";
 import { Poller } from "./poller";
 import { fetchChannelVideos } from "./youtube";
 import type { Store } from "./store";
@@ -44,10 +44,12 @@ export function initApi(): ReturnType<typeof Bun.serve> {
   replayVideos(store);
   replaySeen(store);
 
-  // Load config channels
+  // Load config channels + groups
   const configPath = process.env.OT_CONFIG_PATH || findConfigFile("./config/channels");
   if (configPath) {
-    const configChannels = loadConfigFile(configPath);
+    const { groups, channels: configChannels } = loadConfig(configPath);
+    store.setConfiguredGroups(groups);
+    if (groups.length) logger.info(`Config groups: ${groups.join(", ")}`);
     for (const c of configChannels) {
       // Only add if not exists
       if (!store.getChannel(c.channelId)) {
@@ -59,14 +61,19 @@ export function initApi(): ReturnType<typeof Bun.serve> {
 
   // Start poller
   const pollInterval = parseInt(process.env.OT_POLL_INTERVAL_SECONDS || "300");
-  const discordUrl = process.env.OT_DISCORD_WEBHOOK_URL;
   // On first sight of a channel, surface only the latest N videos (default 1)
   // and only those newer than initialMaxAgeDays (default 7) so a channel's
   // historical backlog — or a stale latest upload — never floods the feed.
   const initialVideos = parseInt(process.env.OT_INITIAL_VIDEOS_PER_CHANNEL || "1");
   const initialMaxAgeDays = parseInt(process.env.OT_INITIAL_MAX_AGE_DAYS || "7");
-  poller = new Poller(store, discordUrl, pollInterval, initialVideos, initialMaxAgeDays);
+  // Webhooks are resolved per group from the environment by convention
+  // (OT_WEBHOOK_URL_<GROUP> + _*) inside the poller — see src/server/webhooks.ts.
+  poller = new Poller(store, pollInterval, initialVideos, initialMaxAgeDays);
   poller.start();
+
+  // Inline embedded playback toggle. Default ON; "0"/"false"/"" disable it.
+  const embedRaw = process.env.OT_EMBED_VIDEOS;
+  const embedVideos = !(embedRaw === "0" || embedRaw === "false" || embedRaw === "");
 
   // Start server
   const port = parseInt(process.env.OT_PORT || "3000");
@@ -92,6 +99,16 @@ export function initApi(): ReturnType<typeof Bun.serve> {
         return jsonResponse(store.getStats());
       }
 
+      // Groups
+      if (path === "/api/groups") {
+        return jsonResponse({ groups: store.getGroups() });
+      }
+
+      // Client config
+      if (path === "/api/config") {
+        return jsonResponse({ embedVideos });
+      }
+
       // Channels
       if (path === "/api/channels") {
         if (method === "GET") {
@@ -102,6 +119,7 @@ export function initApi(): ReturnType<typeof Bun.serve> {
           const channel = {
             channelId: body.channelId,
             name: body.name,
+            group: body.group || "default",
             source: "ui" as const,
             addedAt: new Date().toISOString(),
             updatedVia: "ui" as const,
@@ -115,6 +133,16 @@ export function initApi(): ReturnType<typeof Bun.serve> {
           });
           
           return jsonResponse({ success: true }, 201);
+        }
+      }
+
+      // Move a channel to another group
+      if (path.startsWith("/api/channels/") && path.endsWith("/group")) {
+        if (method === "POST" || method === "PATCH") {
+          const channelId = path.split("/")[3];
+          const body = await req.json();
+          const ok = store.setChannelGroup(channelId, body.group ?? "default");
+          return ok ? jsonResponse({ success: true }) : notFound();
         }
       }
 
@@ -133,9 +161,11 @@ export function initApi(): ReturnType<typeof Bun.serve> {
       // Videos
       if (path === "/api/videos") {
         const unwatchedOnly = url.searchParams.get("unwatched") === "1";
+        const watchLaterOnly = url.searchParams.get("watchlater") === "1";
+        const group = url.searchParams.get("group") || undefined;
         const limit = parseInt(url.searchParams.get("limit") || "50");
         const offset = parseInt(url.searchParams.get("offset") || "0");
-        const result = store.getVideos({ unwatchedOnly, limit, offset });
+        const result = store.getVideos({ unwatchedOnly, watchLaterOnly, group, limit, offset });
         return jsonResponse(result);
       }
 
@@ -144,6 +174,15 @@ export function initApi(): ReturnType<typeof Bun.serve> {
         if (method === "POST") {
           const body = await req.json();
           store.markWatched(videoId, body.watched);
+          return jsonResponse({ success: true });
+        }
+      }
+
+      if (path.startsWith("/api/videos/") && path.includes("/watchlater")) {
+        const videoId = path.split("/")[3];
+        if (method === "POST") {
+          const body = await req.json();
+          store.setWatchLater(videoId, !!body.value);
           return jsonResponse({ success: true });
         }
       }

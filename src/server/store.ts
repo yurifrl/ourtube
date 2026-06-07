@@ -6,6 +6,7 @@ import { Database } from "bun:sqlite";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Channel, Video } from "../../schema/types";
+import { normalizeGroup, DEFAULT_GROUP } from "../../schema/types";
 
 const logger = {
   info: (msg: string) => console.log(`[store] ${msg}`),
@@ -34,6 +35,8 @@ export function getSeenFile(): string {
 
 export class Store {
   db: Database;
+  /** Group names defined in config. Available groups = these ∪ DEFAULT_GROUP. */
+  configuredGroups: string[] = [];
 
   constructor(db: Database) {
     this.db = db;
@@ -42,6 +45,8 @@ export class Store {
   // ── channels ─────────────────────────────────────────────────────────────
 
   upsertChannel(channel: Channel): void {
+    const group = normalizeGroup(channel.group);
+    const normalized: Channel = { ...channel, group };
     const existing = this.db
       .query("SELECT 1 FROM channels WHERE channel_id = ?")
       .get(channel.channelId);
@@ -50,23 +55,10 @@ export class Store {
       // Append to JSONL
       const file = getChannelsFile();
       mkdirSync(dirname(file), { recursive: true });
-      appendFileSync(file, JSON.stringify(channel) + "\n");
+      appendFileSync(file, JSON.stringify(normalized) + "\n");
     }
 
-    // Update SQLite
-    this.db.query(
-      `INSERT OR REPLACE INTO channels
-       (channel_id, name, source, added_at, updated_via, updated_at, raw)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      channel.channelId,
-      channel.name,
-      channel.source,
-      channel.addedAt,
-      channel.updatedVia,
-      channel.updatedAt,
-      JSON.stringify(channel)
-    );
+    insertOrReplaceChannel(this.db, normalized);
   }
 
   removeChannel(channelId: string): void {
@@ -90,6 +82,49 @@ export class Store {
       JSON.stringify(updated),
       channelId
     );
+  }
+
+  /** Move a channel to another group (persists to JSONL). Returns false if unknown. */
+  setChannelGroup(channelId: string, group: string): boolean {
+    const channel = this.getChannel(channelId);
+    if (!channel) return false;
+    const normalized = normalizeGroup(group);
+    const updated: Channel = { ...channel, group: normalized, updatedVia: "ui", updatedAt: new Date().toISOString() };
+    appendFileSync(getChannelsFile(), JSON.stringify(updated) + "\n");
+    insertOrReplaceChannel(this.db, updated);
+    return true;
+  }
+
+  /** Set the config-defined group list (drives the UI's selectable groups). */
+  setConfiguredGroups(names: string[]): void {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const n of names) {
+      const g = normalizeGroup(n);
+      if (!seen.has(g)) { seen.add(g); out.push(g); }
+    }
+    this.configuredGroups = out;
+  }
+
+  /** Channel count per group, from the channels table. */
+  private groupCounts(): Map<string, number> {
+    const rows = this.db
+      .query("SELECT \"group\" AS g, COUNT(*) AS c FROM channels GROUP BY \"group\"")
+      .all() as { g: string; c: number }[];
+    return new Map(rows.map((r) => [r.g, r.c]));
+  }
+
+  /**
+   * Available groups with channel counts. The set is exactly the config-defined
+   * groups plus DEFAULT_GROUP (always present) — groups are NOT collected from
+   * channel usage. Ordered by name.
+   */
+  getGroups(): { group: string; count: number }[] {
+    const counts = this.groupCounts();
+    const names = new Set<string>([DEFAULT_GROUP, ...this.configuredGroups]);
+    return [...names]
+      .sort()
+      .map((group) => ({ group, count: counts.get(group) ?? 0 }));
   }
 
   getChannels(): Channel[] {
@@ -204,6 +239,30 @@ export class Store {
     );
   }
 
+  /** Add/remove a video from the Watch Later queue (persists to JSONL). */
+  setWatchLater(videoId: string, watchLater: boolean): void {
+    const video = this.getVideo(videoId);
+    if (!video) return;
+
+    const updated: Video = {
+      ...video,
+      watchLater,
+      watchLaterAt: watchLater ? new Date().toISOString() : undefined,
+    };
+
+    const month = video.publishedAt.slice(0, 7);
+    appendFileSync(getVideosFile(month), JSON.stringify(updated) + "\n");
+
+    this.db.query(
+      "UPDATE videos SET watch_later = ?, watch_later_at = ?, raw = ? WHERE video_id = ?"
+    ).run(
+      watchLater ? 1 : 0,
+      updated.watchLaterAt ? Date.parse(updated.watchLaterAt) : null,
+      JSON.stringify(updated),
+      videoId
+    );
+  }
+
   getVideo(videoId: string): Video | null {
     const row = this.db
       .query("SELECT raw FROM videos WHERE video_id = ?")
@@ -213,7 +272,9 @@ export class Store {
 
   getVideos(opts: {
     unwatchedOnly?: boolean;
+    watchLaterOnly?: boolean;
     channelId?: string;
+    group?: string;
     limit?: number;
     offset?: number;
   } = {}): { items: Video[]; totalCount: number } {
@@ -223,9 +284,16 @@ export class Store {
     if (opts.unwatchedOnly) {
       where.push("watched = 0");
     }
+    if (opts.watchLaterOnly) {
+      where.push("watch_later = 1");
+    }
     if (opts.channelId) {
       where.push("channel_id = ?");
       params.push(opts.channelId);
+    }
+    if (opts.group) {
+      where.push('channel_id IN (SELECT channel_id FROM channels WHERE "group" = ?)');
+      params.push(normalizeGroup(opts.group));
     }
 
     const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
@@ -258,26 +326,28 @@ export class Store {
 // ── helpers ───────────────────────────────────────────────────────────────
 
 function insertOrReplaceChannel(db: Database, channel: Channel): void {
+  const group = normalizeGroup(channel.group);
   db.query(
     `INSERT OR REPLACE INTO channels
-     (channel_id, name, source, added_at, updated_via, updated_at, raw)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
+     (channel_id, name, "group", source, added_at, updated_via, updated_at, raw)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     channel.channelId,
     channel.name,
+    group,
     channel.source,
     channel.addedAt,
     channel.updatedVia,
     channel.updatedAt,
-    JSON.stringify(channel)
+    JSON.stringify({ ...channel, group })
   );
 }
 
 function insertOrReplaceVideo(db: Database, video: Video): void {
   db.query(
     `INSERT OR REPLACE INTO videos
-     (video_id, title, channel_id, channel_name, published_at, thumbnail, description, url, fetched_at, watched, watched_at, raw)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     (video_id, title, channel_id, channel_name, published_at, thumbnail, description, url, fetched_at, watched, watched_at, watch_later, watch_later_at, raw)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     video.videoId,
     video.title,
@@ -290,6 +360,8 @@ function insertOrReplaceVideo(db: Database, video: Video): void {
     Date.parse(video.fetchedAt),
     video.watched ? 1 : 0,
     video.watchedAt ? Date.parse(video.watchedAt) : null,
+    video.watchLater ? 1 : 0,
+    video.watchLaterAt ? Date.parse(video.watchLaterAt) : null,
     JSON.stringify(video)
   );
 }
@@ -300,12 +372,14 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS channels (
   channel_id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
+  "group" TEXT NOT NULL DEFAULT 'default',
   source TEXT NOT NULL,
   added_at TEXT NOT NULL,
   updated_via TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   raw TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS channels_group ON channels("group");
 
 CREATE TABLE IF NOT EXISTS videos (
   video_id TEXT PRIMARY KEY,
@@ -319,12 +393,15 @@ CREATE TABLE IF NOT EXISTS videos (
   fetched_at INTEGER NOT NULL,
   watched INTEGER NOT NULL DEFAULT 0,
   watched_at INTEGER,
+  watch_later INTEGER NOT NULL DEFAULT 0,
+  watch_later_at INTEGER,
   raw TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS videos_published ON videos(published_at DESC);
 CREATE INDEX IF NOT EXISTS videos_channel ON videos(channel_id);
 CREATE INDEX IF NOT EXISTS videos_watched ON videos(watched);
+CREATE INDEX IF NOT EXISTS videos_watch_later ON videos(watch_later);
 
 CREATE TABLE IF NOT EXISTS seen (
   video_id TEXT PRIMARY KEY,
@@ -363,7 +440,7 @@ export function replayChannels(store: Store): void {
         continue;
       }
       if (!data.channelId || !data.name) continue;
-      const channel = data as Channel;
+      const channel = { ...data, group: normalizeGroup(data.group) } as Channel;
       store.db.query("DELETE FROM channels WHERE channel_id = ?").run(channel.channelId);
       insertOrReplaceChannel(store.db, channel);
       seen.add(channel.channelId);

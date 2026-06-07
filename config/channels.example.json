@@ -1,0 +1,17 @@
+{
+  "groups": [
+    { "name": "default" },
+    { "name": "gaming" }
+  ],
+  "channels": [
+    {
+      "channel_name": "Example Channel One",
+      "channel_id": "UCxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    {
+      "channel_name": "Example Channel Two",
+      "channel_id": "UCyyyyyyyyyyyyyyyyyyyyyy",
+      "group": "gaming"
+    }
+  ]
+}

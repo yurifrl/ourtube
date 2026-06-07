@@ -3,8 +3,10 @@
  */
 import { fetchChannelVideos, fetchChannelAvatar } from "./youtube";
 import { postVideo } from "./discord";
+import { resolveGroupWebhooks } from "./webhooks";
 import type { Store } from "./store";
 import type { Video } from "../../schema/types";
+import { normalizeGroup } from "../../schema/types";
 
 const logger = {
   info: (msg: string) => console.log(`[poller] ${msg}`),
@@ -14,7 +16,6 @@ const logger = {
 
 export class Poller {
   store: Store;
-  discordUrl?: string;
   intervalMs: number;
   initialVideos: number;
   initialMaxAgeDays: number;
@@ -23,13 +24,11 @@ export class Poller {
 
   constructor(
     store: Store,
-    discordUrl?: string,
     intervalSeconds = 300,
     initialVideos = 1,
     initialMaxAgeDays = 7,
   ) {
     this.store = store;
-    this.discordUrl = discordUrl;
     this.intervalMs = intervalSeconds * 1000;
     this.initialVideos = Math.max(0, initialVideos);
     this.initialMaxAgeDays = Math.max(0, initialMaxAgeDays);
@@ -107,14 +106,41 @@ export class Poller {
       }
     }
 
-    // Post to Discord
-    if (this.discordUrl && newVideos.length > 0) {
-      for (const video of newVideos.slice(0, 5)) { // Limit to 5 per poll
-        try {
-          await postVideo(this.discordUrl, video);
-          await new Promise((r) => setTimeout(r, 1000)); // Rate limit
-        } catch (error) {
-          logger.error("Discord post failed", error as Error);
+    // Post to Discord, routed per group. A video belongs to exactly one group
+    // (its channel's group), so each new video maps to a single group whose
+    // webhooks are resolved from the environment by convention
+    // (OT_WEBHOOK_URL_<GROUP> + _*). Multiple webhooks per group all fire.
+    if (newVideos.length > 0) {
+      // channelId -> group lookup for this batch
+      const groupOf = new Map<string, string>();
+      for (const c of this.store.getChannels()) {
+        groupOf.set(c.channelId, normalizeGroup(c.group));
+      }
+
+      // Bucket new videos by group, capped at 5 per group per poll.
+      const byGroup = new Map<string, Video[]>();
+      for (const v of newVideos) {
+        const g = groupOf.get(v.channelId) ?? normalizeGroup(undefined);
+        const bucket = byGroup.get(g) ?? [];
+        if (bucket.length < 5) bucket.push(v);
+        byGroup.set(g, bucket);
+      }
+
+      for (const [group, vids] of byGroup) {
+        const urls = resolveGroupWebhooks(group);
+        if (urls.length === 0) {
+          logger.debug(`No webhook env vars for group "${group}" — skipping ${vids.length} videos`);
+          continue;
+        }
+        for (const video of vids) {
+          for (const url of urls) {
+            try {
+              await postVideo(url, video);
+              await new Promise((r) => setTimeout(r, 1000)); // Rate limit
+            } catch (error) {
+              logger.error("Discord post failed", error as Error);
+            }
+          }
         }
       }
     }

@@ -57,7 +57,7 @@ tasks:
     deps: [envs:op]
     dotenv: ['.env']
     cmds:
-      - docker run -p 3000:3000 -e OT_DISCORD_WEBHOOK_URL=$OT_DISCORD_WEBHOOK_URL ourtube:latest
+      - docker run -p 3000:3000 -e OT_WEBHOOK_URL_DEFAULT=$OT_WEBHOOK_URL_DEFAULT ourtube:latest
 
   test:
     desc: Run tests

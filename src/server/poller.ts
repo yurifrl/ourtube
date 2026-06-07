@@ -64,13 +64,24 @@ export class Poller {
         }
 
         const videos = await fetchChannelVideos(channel.channelId, channel.name);
-        for (const video of videos) {
+
+        // First time we ever see this channel: don't flood the feed with its
+        // whole backlog. Keep only the latest video as new; everything older
+        // is recorded as already-watched so it never shows up retroactively.
+        const firstRun = this.store.countChannelVideos(channel.channelId) === 0;
+
+        videos.forEach((video, idx) => {
+          if (firstRun && idx > 0) {
+            const { isNew } = this.store.upsertVideo({ ...video, watched: true });
+            void isNew;
+            return;
+          }
           const { isNew } = this.store.upsertVideo(video);
           if (isNew) {
             newVideos.push(video);
             logger.info(`New video: ${video.title}`);
           }
-        }
+        });
       } catch (error) {
         logger.error(`Failed to poll ${channel.name}`, error as Error);
       }

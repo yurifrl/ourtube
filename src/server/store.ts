@@ -104,42 +104,34 @@ export class Store {
 
   // ── videos ───────────────────────────────────────────────────────────────
 
+  /** How many videos are stored for a channel. */
+  countChannelVideos(channelId: string): number {
+    return (
+      this.db
+        .query("SELECT COUNT(*) AS c FROM videos WHERE channel_id = ?")
+        .get(channelId) as { c: number }
+    ).c;
+  }
+
   upsertVideo(video: Video): { isNew: boolean } {
     const existing = this.db
       .query("SELECT 1 FROM videos WHERE video_id = ?")
       .get(video.videoId);
 
-    const isNew = !existing;
-    const month = video.publishedAt.slice(0, 7);
-
-    if (isNew) {
-      // Append to JSONL
-      const file = getVideosFile(month);
-      mkdirSync(dirname(file), { recursive: true });
-      appendFileSync(file, JSON.stringify(video) + "\n");
+    // Only persist brand-new videos. An already-known video keeps its stored
+    // state (notably `watched`) — re-polling must never clobber or resurrect it.
+    if (existing) {
+      return { isNew: false };
     }
 
-    // Update SQLite
-    this.db.query(
-      `INSERT OR REPLACE INTO videos
-       (video_id, title, channel_id, channel_name, published_at, thumbnail, description, url, fetched_at, watched, watched_at, raw)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      video.videoId,
-      video.title,
-      video.channelId,
-      video.channelName,
-      Date.parse(video.publishedAt),
-      video.thumbnail,
-      video.description,
-      video.url,
-      Date.parse(video.fetchedAt),
-      video.watched ? 1 : 0,
-      video.watchedAt ? Date.parse(video.watchedAt) : null,
-      JSON.stringify(video)
-    );
+    const month = video.publishedAt.slice(0, 7);
+    const file = getVideosFile(month);
+    mkdirSync(dirname(file), { recursive: true });
+    appendFileSync(file, JSON.stringify(video) + "\n");
 
-    return { isNew };
+    insertOrReplaceVideo(this.db, video);
+
+    return { isNew: true };
   }
 
   markWatched(videoId: string, watched: boolean): void {
@@ -157,10 +149,15 @@ export class Store {
     const file = getVideosFile(month);
     appendFileSync(file, JSON.stringify(updated) + "\n");
 
-    // Update SQLite
+    // Update SQLite (including the raw JSON the read-side returns)
     this.db.query(
-      "UPDATE videos SET watched = ?, watched_at = ? WHERE video_id = ?"
-    ).run(watched ? 1 : 0, updated.watchedAt ? Date.parse(updated.watchedAt) : null, videoId);
+      "UPDATE videos SET watched = ?, watched_at = ?, raw = ? WHERE video_id = ?"
+    ).run(
+      watched ? 1 : 0,
+      updated.watchedAt ? Date.parse(updated.watchedAt) : null,
+      JSON.stringify(updated),
+      videoId
+    );
   }
 
   getVideo(videoId: string): Video | null {

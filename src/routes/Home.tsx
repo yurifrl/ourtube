@@ -6,12 +6,10 @@ import type { Video as VideoType } from "../../schema/types";
 export function Home() {
   const [videos, setVideos] = useState<VideoType[]>([]);
   const [loading, setLoading] = useState(true);
-  // track which ids are still "new" (glowing) in this session so they don't
-  // pop out of the list the instant they're marked — they fade in place.
-  const [watchedIds, setWatchedIds] = useState<Set<string>>(new Set());
 
   const fetchVideos = useCallback(async () => {
-    const res = await fetch(`/api/videos?unwatched=1&limit=100`);
+    // fetch ALL videos — watched ones stay in the feed, they just lose the glow
+    const res = await fetch(`/api/videos?limit=500`);
     const data = await res.json();
     setVideos(data.items || []);
     setLoading(false);
@@ -22,12 +20,10 @@ export function Home() {
   }, [fetchVideos]);
 
   const markWatched = useCallback(async (videoId: string) => {
-    setWatchedIds((prev) => {
-      if (prev.has(videoId)) return prev;
-      const next = new Set(prev);
-      next.add(videoId);
-      return next;
-    });
+    // flip to watched in place — the card stays, only the glow goes away
+    setVideos((prev) =>
+      prev.map((v) => (v.videoId === videoId ? { ...v, watched: true } : v))
+    );
     await fetch(`/api/videos/${videoId}/watched`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -35,7 +31,7 @@ export function Home() {
     });
   }, []);
 
-  const newCount = videos.filter((v) => !watchedIds.has(v.videoId)).length;
+  const newCount = videos.filter((v) => !v.watched).length;
 
   if (loading) {
     return (
@@ -72,7 +68,7 @@ export function Home() {
           <div className="card-body">
             <div className="text-center py-20 text-ink-400">
               <Video size={32} className="mx-auto mb-3 opacity-30" />
-              No new videos. Nice!
+              No videos yet.
             </div>
           </div>
         </div>
@@ -82,7 +78,6 @@ export function Home() {
             <VideoCard
               key={video.videoId}
               video={video}
-              isNew={!watchedIds.has(video.videoId)}
               onSeen={() => markWatched(video.videoId)}
             />
           ))}
@@ -94,13 +89,15 @@ export function Home() {
 
 interface VideoCardProps {
   video: VideoType;
-  isNew: boolean;
   onSeen: () => void;
 }
 
-function VideoCard({ video, isNew, onSeen }: VideoCardProps) {
+function VideoCard({ video, onSeen }: VideoCardProps) {
   const ref = useRef<HTMLDivElement>(null);
-  const seenTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hasEntered = useRef(false);
+  const dwellTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const isNew = !video.watched;
 
   useEffect(() => {
     if (!isNew) return;
@@ -109,26 +106,33 @@ function VideoCard({ video, isNew, onSeen }: VideoCardProps) {
 
     const observer = new IntersectionObserver(
       ([entry]) => {
-        // card is fully in view → start a short dwell timer, then mark seen
-        if (entry.isIntersecting && entry.intersectionRatio >= 0.95) {
-          if (!seenTimer.current) {
-            seenTimer.current = setTimeout(() => onSeen(), 1200);
+        if (entry.isIntersecting) {
+          // require the card to actually linger in view (not a fast-scroll
+          // flyby) before it counts as "seen"
+          if (!dwellTimer.current) {
+            dwellTimer.current = setTimeout(() => {
+              hasEntered.current = true;
+            }, 700);
           }
         } else {
-          // scrolled away before dwell completed → cancel
-          if (seenTimer.current) {
-            clearTimeout(seenTimer.current);
-            seenTimer.current = null;
+          // left view: cancel a pending dwell
+          if (dwellTimer.current) {
+            clearTimeout(dwellTimer.current);
+            dwellTimer.current = null;
+          }
+          // only mark seen if it had genuinely lingered earlier
+          if (hasEntered.current) {
+            onSeen();
           }
         }
       },
-      { threshold: [0, 0.95, 1] }
+      { threshold: 0.6 }
     );
 
     observer.observe(el);
     return () => {
       observer.disconnect();
-      if (seenTimer.current) clearTimeout(seenTimer.current);
+      if (dwellTimer.current) clearTimeout(dwellTimer.current);
     };
   }, [isNew, onSeen]);
 
@@ -136,10 +140,8 @@ function VideoCard({ video, isNew, onSeen }: VideoCardProps) {
     <div
       ref={ref}
       className={cn(
-        "card group overflow-hidden transition-all duration-700",
-        isNew
-          ? "ring-1 ring-accent/40 shadow-glow"
-          : "opacity-60 saturate-50"
+        "card group overflow-hidden transition-shadow duration-700",
+        isNew && "ring-1 ring-accent/40 shadow-glow"
       )}
     >
       <a href={video.url} target="_blank" rel="noopener noreferrer" className="block">

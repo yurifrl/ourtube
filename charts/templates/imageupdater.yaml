@@ -1,0 +1,15 @@
+{{- if .Values.imageUpdater.enabled }}
+apiVersion: argocd-image-updater.argoproj.io/v1alpha1
+kind: ImageUpdater
+metadata:
+  name: {{ include "ourtube.fullname" . }}
+  namespace: {{ .Values.imageUpdater.argocdNamespace }}
+  labels:
+    {{- include "ourtube.labels" . | nindent 4 }}
+spec:
+  applicationRefs:
+    - namePattern: {{ .Values.imageUpdater.applicationName | quote }}
+      images:
+        - alias: ourtube
+          imageName: {{ .Values.image.repository | quote }}
+{{- end }}

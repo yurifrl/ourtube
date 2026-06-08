@@ -36,6 +36,13 @@ externalSecrets:
     kind: ClusterSecretStore  # or SecretStore
   remoteKey: ourtube        # remote item to extract all fields from
 
+# ArgoCD Image Updater CR (charts/templates/imageupdater.yaml). Deployed into the
+# argocd namespace where the Application objects live.
+imageUpdater:
+  enabled: true
+  argocdNamespace: argocd          # where the Argo CD Application objects live
+  applicationName: ourtube         # the Argo CD Application name to manage
+
 # Channel list, declared inline (works directly in an ArgoCD Application):
 # channels:
 #   - name: Linus Tech Tips

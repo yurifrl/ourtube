@@ -13,6 +13,11 @@ spec:
     metadata:
       labels:
         {{- include "ourtube.selectorLabels" . | nindent 8 }}
+      annotations:
+        # Roll the pod whenever the channels ConfigMap changes. The pod reads
+        # its config only at startup, so without this a `channels` values edit
+        # updates the ConfigMap but the running pod keeps the stale config.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
     spec:
       containers:
         - name: ourtube
